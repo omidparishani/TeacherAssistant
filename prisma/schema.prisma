@@ -1,0 +1,181 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String             @id @default(cuid())
+  name          String?
+  email         String             @unique
+  emailVerified DateTime?
+  password      String?
+  image         String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  accounts      Account[]
+  sessions      Session[]
+  books         Book[]
+  analyses      TeachingAnalysis[]
+  savedPlans    SavedPlan[]
+  settings      UserSettings?
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Book {
+  id           String             @id @default(cuid())
+  title        String
+  subject      String
+  grade        Int                @default(3)
+  academicYear String?
+  pdfUrl       String
+  coverImage   String?
+  totalPages   Int                @default(0)
+  status       String             @default("processing")
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  userId       String
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lessons      Lesson[]
+  pages        BookPage[]
+  analyses     TeachingAnalysis[]
+}
+
+model Lesson {
+  id           String     @id @default(cuid())
+  bookId       String
+  title        String
+  lessonNumber Int
+  startPage    Int
+  endPage      Int
+  book         Book       @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  pages        BookPage[]
+}
+
+model BookPage {
+  id             String             @id @default(cuid())
+  bookId         String
+  pageNumber     Int
+  extractedText  String?            @db.Text
+  pageImageUrl   String?
+  lessonId       String?
+  analysisStatus String             @default("pending")
+  book           Book               @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  lesson         Lesson?            @relation(fields: [lessonId], references: [id])
+  analyses       TeachingAnalysis[]
+
+  @@unique([bookId, pageNumber])
+}
+
+model TeachingAnalysis {
+  id                    String   @id @default(cuid())
+  bookId                String?
+  bookPageId            String?
+  userId                String
+  title                 String?
+  analysisType          String   @default("full")
+  learningObjectives    Json?
+  teachingMethod        Json?
+  motivationIdeas       Json?
+  classroomActivities   Json?
+  questions             Json?
+  assessmentMethods     Json?
+  importantTeacherNotes Json?
+  vocabulary            Json?
+  creativeActivities    Json?
+  rawContent            Json?
+  sourceNote            String?
+  generatedAt           DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  isSaved               Boolean  @default(false)
+  book                  Book?    @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  bookPage              BookPage? @relation(fields: [bookPageId], references: [id], onDelete: Cascade)
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  savedPlan             SavedPlan?
+}
+
+model SavedPlan {
+  id                 String            @id @default(cuid())
+  title              String
+  content            Json?
+  userId             String
+  teachingAnalysisId String?           @unique
+  createdAt          DateTime          @default(now())
+  user               User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teachingAnalysis   TeachingAnalysis? @relation(fields: [teachingAnalysisId], references: [id])
+}
+
+model UserSettings {
+  id              String  @id @default(cuid())
+  userId          String  @unique
+  grade           Int     @default(3)
+  studentAge      Int     @default(9)
+  classType       String  @default("mixed")
+  sessionMinutes  Int     @default(45)
+  studentCount    Int     @default(25)
+  classFacilities String?
+  user            User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// چند Provider قابل مدیریت
+model AIProvider {
+  id          String   @id @default(cuid())
+  name        String   // مثلا Groq اصلی
+  provider    String   // groq | openai | xai | openrouter | custom
+  apiKey      String
+  baseUrl     String?
+  model       String
+  maxTokens   Int      @default(4096)
+  temperature Float    @default(0.7)
+  isActive    Boolean  @default(false) // فقط یکی active باشد
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// پرامپت‌های قابل ویرایش
+model AIPrompt {
+  id          String   @id @default(cuid())
+  key         String   @unique // system | quick | full | creative
+  title       String
+  content     String   @db.Text
+  description String?
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}

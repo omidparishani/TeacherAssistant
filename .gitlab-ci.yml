@@ -1,0 +1,41 @@
+stages:
+  - install
+  - lint
+  - build
+
+variables:
+  NODE_VERSION: "20"
+
+default:
+  image: node:${NODE_VERSION}
+
+install:
+  stage: install
+  script:
+    - npm ci
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1 hour
+
+lint:
+  stage: lint
+  needs: [install]
+  script:
+    - npm run lint || true
+  allow_failure: true
+
+build:
+  stage: build
+  needs: [install]
+  script:
+    - npx prisma generate
+    - npm run build
+  artifacts:
+    paths:
+      - .next/
+    expire_in: 1 day
