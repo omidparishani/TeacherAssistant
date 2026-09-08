@@ -10,14 +10,9 @@ export async function GET() {
   }
 
   try {
-    // اول سعی می‌کنیم provider فعال رو بگیریم، اگر نبود آخرین مورد
-    const row =
-      (await prisma.aIProvider.findFirst({
-        where: { isActive: true },
-      })) ||
-      (await prisma.aIProvider.findFirst({
-        orderBy: { updatedAt: "desc" },
-      }));
+    const row = await prisma.aISettings.findFirst({
+      orderBy: { updatedAt: "desc" },
+    });
 
     if (!row) {
       return NextResponse.json({
@@ -42,10 +37,7 @@ export async function GET() {
       rawKeySet: true,
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: "جدول تنظیمات هنوز ساخته نشده. prisma db push بزنید." },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "جدول تنظیمات هنوز ساخته نشده. prisma db push بزنید." }, { status: 500 });
   }
 }
 
@@ -59,63 +51,45 @@ export async function PUT(req: Request) {
   const { provider, apiKey, baseUrl, model, maxTokens, temperature } = body;
 
   if (!provider || !model) {
-    return NextResponse.json(
-      { error: "provider و model الزامی است" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "provider و model الزامی است" }, { status: 400 });
   }
 
-  // پیدا کردن رکورد فعلی (فعال یا آخرین)
-  const existing =
-    (await prisma.aIProvider.findFirst({
-      where: { isActive: true },
-    })) ||
-    (await prisma.aIProvider.findFirst({
-      orderBy: { updatedAt: "desc" },
-    }));
+  const existing = await prisma.aISettings.findFirst({
+    orderBy: { updatedAt: "desc" },
+  });
 
-  // اگر apiKey ستاره باشد یعنی کاربر تغییر نداده
+  // اگر apiKey ستاره باشد یعنی تغییر نکرده
   const keyToSave =
     apiKey && !String(apiKey).startsWith("********")
       ? apiKey
       : existing?.apiKey || "";
 
   if (!keyToSave) {
-    return NextResponse.json(
-      { error: "کلید API الزامی است" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "کلید API الزامی است" }, { status: 400 });
   }
 
   let row;
-
   if (existing) {
-    // آپدیت رکورد موجود
-    row = await prisma.aIProvider.update({
+    row = await prisma.aISettings.update({
       where: { id: existing.id },
       data: {
-        name: provider, // چون name الزامی است
         provider,
         apiKey: keyToSave,
         baseUrl: baseUrl || null,
         model,
         maxTokens: Number(maxTokens) || 4096,
         temperature: Number(temperature) || 0.7,
-        isActive: true,
       },
     });
   } else {
-    // ساخت رکورد جدید
-    row = await prisma.aIProvider.create({
+    row = await prisma.aISettings.create({
       data: {
-        name: provider,
         provider,
         apiKey: keyToSave,
         baseUrl: baseUrl || null,
         model,
         maxTokens: Number(maxTokens) || 4096,
         temperature: Number(temperature) || 0.7,
-        isActive: true,
       },
     });
   }
