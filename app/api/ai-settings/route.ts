@@ -3,6 +3,9 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+/**
+ * سازگاری با UI قدیمی — از جدول AIProvider استفاده می‌کند
+ */
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
@@ -10,9 +13,9 @@ export async function GET() {
   }
 
   try {
-    const row = await prisma.aISettings.findFirst({
-      orderBy: { updatedAt: "desc" },
-    });
+    const row =
+      (await prisma.aIProvider.findFirst({ where: { isActive: true } })) ||
+      (await prisma.aIProvider.findFirst({ orderBy: { updatedAt: "desc" } }));
 
     if (!row) {
       return NextResponse.json({
@@ -37,7 +40,11 @@ export async function GET() {
       rawKeySet: true,
     });
   } catch (e) {
-    return NextResponse.json({ error: "جدول تنظیمات هنوز ساخته نشده. prisma db push بزنید." }, { status: 500 });
+    console.error(e);
+    return NextResponse.json(
+      { error: "جدول Provider هنوز ساخته نشده. prisma db push بزنید." },
+      { status: 500 }
+    );
   }
 }
 
@@ -51,14 +58,16 @@ export async function PUT(req: Request) {
   const { provider, apiKey, baseUrl, model, maxTokens, temperature } = body;
 
   if (!provider || !model) {
-    return NextResponse.json({ error: "provider و model الزامی است" }, { status: 400 });
+    return NextResponse.json(
+      { error: "provider و model الزامی است" },
+      { status: 400 }
+    );
   }
 
-  const existing = await prisma.aISettings.findFirst({
-    orderBy: { updatedAt: "desc" },
-  });
+  const existing =
+    (await prisma.aIProvider.findFirst({ where: { isActive: true } })) ||
+    (await prisma.aIProvider.findFirst({ orderBy: { updatedAt: "desc" } }));
 
-  // اگر apiKey ستاره باشد یعنی تغییر نکرده
   const keyToSave =
     apiKey && !String(apiKey).startsWith("********")
       ? apiKey
@@ -68,28 +77,35 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "کلید API الزامی است" }, { status: 400 });
   }
 
+  // فقط یک provider فعال
+  await prisma.aIProvider.updateMany({ data: { isActive: false } });
+
   let row;
   if (existing) {
-    row = await prisma.aISettings.update({
+    row = await prisma.aIProvider.update({
       where: { id: existing.id },
       data: {
+        name: existing.name || provider,
         provider,
         apiKey: keyToSave,
         baseUrl: baseUrl || null,
         model,
         maxTokens: Number(maxTokens) || 4096,
         temperature: Number(temperature) || 0.7,
+        isActive: true,
       },
     });
   } else {
-    row = await prisma.aISettings.create({
+    row = await prisma.aIProvider.create({
       data: {
+        name: provider,
         provider,
         apiKey: keyToSave,
         baseUrl: baseUrl || null,
         model,
         maxTokens: Number(maxTokens) || 4096,
         temperature: Number(temperature) || 0.7,
+        isActive: true,
       },
     });
   }
