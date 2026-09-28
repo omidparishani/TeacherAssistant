@@ -103,11 +103,9 @@ export async function getAIConfig(): Promise<AIConfig> {
 async function getPrompt(key: string): Promise<string> {
   try {
     const row = await prisma.aIPrompt.findUnique({ where: { key } });
-    if (row && typeof row.content === "string" && row.content.trim()) {
-      return row.content;
-    }
-  } catch (e) {
-    console.warn("getPrompt fallback:", key, e);
+    if (row?.content) return row.content;
+  } catch {
+    /* ignore */
   }
   return DEFAULT_PROMPTS[key] || DEFAULT_SYSTEM;
 }
@@ -253,75 +251,29 @@ export async function generateTeachingAnalysis(
 
   let content: string | null = null;
   try {
-    // بعضی gatewayها (مثل AgentRouter) با response_format مشکل دارند
-    const useJsonMode = !["custom", "openrouter", "xai"].includes(
-      (config.provider || "").toLowerCase()
-    ) && !(config.baseUrl || "").includes("agentrouter");
-
-    const requestBody: any = {
+    const response = await client.chat.completions.create({
       model: config.model,
       temperature: config.temperature,
       max_tokens: config.maxTokens,
+      response_format: { type: "json_object" },
       messages,
-    };
-    if (useJsonMode) {
-      requestBody.response_format = { type: "json_object" };
-    }
-
-    const response: any = await client.chat.completions.create(requestBody);
-
-    content =
-      response?.choices?.[0]?.message?.content ??
-      response?.choices?.[0]?.text ??
-      response?.content ??
-      null;
-
-    if (!content && response?.error) {
-      throw new Error(
-        typeof response.error === "string"
-          ? response.error
-          : response.error?.message || "خطای API"
-      );
-    }
+    });
+    content = response.choices[0]?.message?.content || null;
   } catch (err: any) {
-    const msg = String(err?.message || err || "");
-    // تلاش دوم بدون json_object
-    if (
-      msg.includes("json") ||
-      msg.includes("JSON") ||
-      msg.includes("response_format") ||
-      err?.code === "json_validate_failed" ||
-      err?.status === 400
-    ) {
-      try {
-        const response: any = await client.chat.completions.create({
-          model: config.model,
-          temperature: config.temperature,
-          max_tokens: Math.max(config.maxTokens || 0, 4096),
-          messages: [
-            ...messages,
-            {
-              role: "user",
-              content:
-                "فقط یک آبجکت JSON معتبر برگردان. هیچ متنی قبل یا بعد از JSON ننویس.",
-            },
-          ],
-        });
-        content =
-          response?.choices?.[0]?.message?.content ??
-          response?.choices?.[0]?.text ??
-          null;
-      } catch (err2: any) {
-        throw new Error(
-          err2?.message ||
-            msg ||
-            "خطا در ارتباط با مدل. Base URL، کلید و نام مدل را بررسی کنید."
-        );
-      }
+    const msg = err?.message || "";
+    if (msg.includes("json") || msg.includes("JSON") || err?.code === "json_validate_failed" || err?.status === 400) {
+      const response = await client.chat.completions.create({
+        model: config.model,
+        temperature: config.temperature,
+        max_tokens: Math.max(config.maxTokens, 4096),
+        messages: [
+          ...messages,
+          { role: "user", content: "فقط یک آبجکت JSON معتبر برگردان. هیچ متنی قبل یا بعد ننویس." },
+        ],
+      });
+      content = response.choices[0]?.message?.content || null;
     } else {
-      throw new Error(
-        msg || "خطا در ارتباط با مدل. Base URL، کلید و نام مدل را بررسی کنید."
-      );
+      throw err;
     }
   }
 
@@ -335,30 +287,17 @@ export async function generateTeachingAnalysis(
 
 /** Seed پرامپت‌های پیش‌فرض اگر خالی باشند */
 export async function ensureDefaultPrompts() {
-  try {
+  for (const [key, content] of Object.entries(DEFAULT_PROMPTS)) {
     const titles: Record<string, string> = {
       system: "پرامپت سیستم",
       quick: "دستور تحلیل سریع",
       full: "دستور تحلیل کامل",
       creative: "دستور تحلیل جذاب",
     };
-    const entries = Object.entries(DEFAULT_PROMPTS || {});
-    for (const entry of entries) {
-      const key = entry[0];
-      const content = entry[1];
-      if (!key || content === undefined) continue;
-      await prisma.aIPrompt.upsert({
-        where: { key },
-        create: {
-          key,
-          title: titles[key] || key,
-          content: String(content),
-          description: "",
-        },
-        update: {},
-      });
-    }
-  } catch (e) {
-    console.warn("ensureDefaultPrompts skipped:", e);
+    await prisma.aIPrompt.upsert({
+      where: { key },
+      create: { key, title: titles[key] || key, content, description: "" },
+      update: {},
+    });
   }
 }
