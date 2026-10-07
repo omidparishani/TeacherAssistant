@@ -39,6 +39,13 @@ export async function POST(req: Request) {
       analysisType = ((form.get("analysisType") as string) || "full") as AnalysisType;
       systemPromptKey = (form.get("systemPromptKey") as string) || "system";
       extraText = (form.get("extraText") as string) || "";
+      const currentPageForm = Number(form.get("currentPage") || 0);
+      if (pageNumbers.length === 1 && pageNumbers[0] === 1 && currentPageForm > 1) {
+        pageNumbers = [currentPageForm];
+      }
+      if (!pageNumbers.length && currentPageForm > 0) {
+        pageNumbers = [currentPageForm];
+      }
       const file = form.get("image") as File | null;
       if (file && file.size > 0) {
         const buf = Buffer.from(await file.arrayBuffer());
@@ -48,12 +55,22 @@ export async function POST(req: Request) {
     } else {
       const body = await req.json();
       bookId = body.bookId;
-      pageNumbers = body.pageNumbers || [];
+      pageNumbers = Array.isArray(body.pageNumbers)
+        ? body.pageNumbers.map((n: any) => Number(n)).filter((n: number) => n > 0)
+        : [];
       analysisType = body.analysisType || "full";
       systemPromptKey = body.systemPromptKey || "system";
       imageBase64 = body.imageBase64;
       imageMime = body.imageMime;
       extraText = body.extraText || "";
+      const currentPage = Number(body.currentPage) || 0;
+      // اگر فقط صفحه ۱ آمده ولی currentPage چیز دیگری است → صفحه فعلی
+      if (pageNumbers.length === 1 && pageNumbers[0] === 1 && currentPage > 1) {
+        pageNumbers = [currentPage];
+      }
+      if (!pageNumbers.length && currentPage > 0) {
+        pageNumbers = [currentPage];
+      }
     }
 
     if (!imageBase64 && (!bookId || !pageNumbers?.length)) {
@@ -123,12 +140,17 @@ export async function POST(req: Request) {
       pageText = `صفحات ${pageNumbers.join("، ")} از کتاب ${bookTitle} درس ${subject} پایه سوم. تحلیل مخصوص همین صفحات باشد.`;
     }
 
-    // یکتاسازی ورودی برای جلوگیری از پاسخ تکراری مدل/کش
+    // دستور قطعی صفحه
     pageText =
-      `[درخواست جدید | زمان: ${new Date().toISOString()} | صفحات: ${pageNumbers.join(",")}]\n\n` +
+      `=== دستور الزامی ===\n` +
+      `فقط و فقط صفحات شماره ${pageNumbers.join(" و ")} را تحلیل کن.\n` +
+      `هر اشاره به صفحه دیگر ممنوع است.\n` +
+      `زمان: ${new Date().toISOString()}\n` +
+      `===================\n\n` +
       pageText;
 
-        const settings = await prisma.userSettings.findUnique({ where: { userId } });
+    const settings = await prisma.userSettings.findUnique({ where: { userId } });
+
 
     const result = await generateTeachingAnalysis(
       pageText,

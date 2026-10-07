@@ -115,10 +115,27 @@ export function BookViewer({ book }: { book: Book }) {
   function goToPage(page: number) {
     const p = Math.max(1, Math.min(page, numPages || 1));
     setCurrentPage(p);
+    // اگر فقط یک صفحه انتخاب بود، با صفحه نمایش‌داده‌شده هماهنگ شو
+    setSelectedPages((prev) => (prev.length <= 1 ? [p] : prev.includes(p) ? prev : [...prev, p].sort((a, b) => a - b)));
+    setAnalysis(null);
+    setError("");
   }
 
   async function handleAnalyze() {
-    if (!imageFile && selectedPages.length === 0) {
+    // صفحه هدف = انتخاب‌شده‌ها؛ اگر خالی بود همان صفحه در حال نمایش
+    let pagesToAnalyze = selectedPages.length > 0 ? [...selectedPages] : [currentPage];
+    // اگر کاربر فقط صفحه ۱ را در لیست دارد ولی الان صفحه دیگری را می‌بیند → صفحه فعلی
+    if (pagesToAnalyze.length === 1 && pagesToAnalyze[0] === 1 && currentPage !== 1) {
+      pagesToAnalyze = [currentPage];
+      setSelectedPages([currentPage]);
+    }
+    // همیشه صفحه در حال نمایش را هم لحاظ کن اگر در لیست نیست و فقط یک صفحه انتخاب شده
+    if (pagesToAnalyze.length === 1 && !pagesToAnalyze.includes(currentPage)) {
+      pagesToAnalyze = [currentPage];
+      setSelectedPages([currentPage]);
+    }
+
+    if (!imageFile && pagesToAnalyze.length === 0) {
       setError("حداقل یک صفحه انتخاب کنید یا تصویر آپلود کنید");
       return;
     }
@@ -132,9 +149,10 @@ export function BookViewer({ book }: { book: Book }) {
       if (imageFile) {
         const form = new FormData();
         form.append("bookId", book.id);
-        form.append("pageNumbers", JSON.stringify(selectedPages.length ? selectedPages : [currentPage]));
+        form.append("pageNumbers", JSON.stringify(pagesToAnalyze));
         form.append("analysisType", analysisType);
         form.append("systemPromptKey", systemPromptKey);
+        form.append("currentPage", String(currentPage));
         form.append("image", imageFile);
         res = await fetch(`/api/analysis?_ts=${Date.now()}`, { method: "POST", body: form, cache: "no-store" });
       } else {
@@ -147,7 +165,8 @@ export function BookViewer({ book }: { book: Book }) {
           cache: "no-store",
           body: JSON.stringify({
             bookId: book.id,
-            pageNumbers: selectedPages,
+            pageNumbers: pagesToAnalyze,
+            currentPage,
             analysisType,
             systemPromptKey,
             forceRefresh: true,
@@ -343,6 +362,17 @@ export function BookViewer({ book }: { book: Book }) {
                 {selectedPages.length > 0 && (
                   <span className="mr-1">({selectedPages.join("، ")})</span>
                 )}
+              </p>
+              <p className="text-xs font-medium text-sky-700 bg-sky-50 border border-sky-100 rounded-lg px-2 py-1.5 mt-2">
+                صفحه در حال نمایش: {currentPage}
+                {" — "}
+                تحلیل روی:{" "}
+                {(selectedPages.length === 1 && selectedPages[0] === 1 && currentPage !== 1
+                  ? [currentPage]
+                  : selectedPages.length
+                  ? selectedPages
+                  : [currentPage]
+                ).join("، ")}
               </p>
               <Button
                 variant="outline"
