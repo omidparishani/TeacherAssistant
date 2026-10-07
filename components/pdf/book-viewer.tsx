@@ -108,6 +108,8 @@ export function BookViewer({ book }: { book: Book }) {
         ? prev.filter((p) => p !== pageNum)
         : [...prev, pageNum].sort((a, b) => a - b)
     );
+    setAnalysis(null);
+    setError("");
   }
 
   function goToPage(page: number) {
@@ -134,16 +136,21 @@ export function BookViewer({ book }: { book: Book }) {
         form.append("analysisType", analysisType);
         form.append("systemPromptKey", systemPromptKey);
         form.append("image", imageFile);
-        res = await fetch("/api/analysis", { method: "POST", body: form });
+        res = await fetch(`/api/analysis?_ts=${Date.now()}`, { method: "POST", body: form, cache: "no-store" });
       } else {
-        res = await fetch("/api/analysis", {
+        res = await fetch(`/api/analysis?_ts=${Date.now()}`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+          },
+          cache: "no-store",
           body: JSON.stringify({
             bookId: book.id,
             pageNumbers: selectedPages,
             analysisType,
             systemPromptKey,
+            forceRefresh: true,
           }),
         });
       }
@@ -341,7 +348,7 @@ export function BookViewer({ book }: { book: Book }) {
                 variant="outline"
                 size="sm"
                 className="mt-2 text-xs"
-                onClick={() => setSelectedPages([currentPage])}
+                onClick={() => { setSelectedPages([currentPage]); setAnalysis(null); setError(""); }}
               >
                 فقط صفحه فعلی
               </Button>
@@ -441,7 +448,20 @@ export function BookViewer({ book }: { book: Book }) {
               <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{error}</p>
             )}
 
-            {analysis && <AnalysisResultView data={analysis} analysisId={analysis.id} />}
+            {analysis && (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-500">
+                  تحلیل برای صفحات:{" "}
+                  {(analysis._pageNumbers || selectedPages).join("، ")}
+                  {analysis._generatedAt && (
+                    <span className="mr-2">
+                      • {new Date(analysis._generatedAt).toLocaleTimeString("fa-IR")}
+                    </span>
+                  )}
+                </p>
+                <AnalysisResultView data={analysis} analysisId={analysis.id} />
+              </div>
+            )}
           </div>
         </aside>
       </div>

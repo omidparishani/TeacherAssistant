@@ -103,9 +103,11 @@ export async function getAIConfig(): Promise<AIConfig> {
 async function getPrompt(key: string): Promise<string> {
   try {
     const row = await prisma.aIPrompt.findUnique({ where: { key } });
-    if (row?.content) return row.content;
-  } catch {
-    /* ignore */
+    if (row && typeof row.content === "string" && row.content.trim()) {
+      return row.content;
+    }
+  } catch (e) {
+    console.warn("getPrompt fallback:", key, e);
   }
   return DEFAULT_PROMPTS[key] || DEFAULT_SYSTEM;
 }
@@ -194,6 +196,49 @@ function normalizeResult(parsed: any): AnalysisResult {
   };
 }
 
+
+function pickContent(response: any): string | null {
+  if (!response) return null;
+  // OpenAI standard
+  const c1 = response?.choices?.[0]?.message?.content;
+  if (typeof c1 === "string" && c1.trim()) return c1;
+  // array content parts
+  if (Array.isArray(c1)) {
+    const text = c1
+      .map((p: any) => (typeof p === "string" ? p : p?.text || ""))
+      .join("")
+      .trim();
+    if (text) return text;
+  }
+  // legacy / alternate
+  const c2 = response?.choices?.[0]?.text;
+  if (typeof c2 === "string" && c2.trim()) return c2;
+  // some gateways
+  if (typeof response?.content === "string" && response.content.trim()) return response.content;
+  if (typeof response?.output_text === "string" && response.output_text.trim()) return response.output_text;
+  if (typeof response?.message === "string" && response.message.trim()) return response.message;
+  if (typeof response?.data === "string" && response.data.trim()) return response.data;
+  // nested data.choices
+  const c3 = response?.data?.choices?.[0]?.message?.content;
+  if (typeof c3 === "string" && c3.trim()) return c3;
+  return null;
+}
+
+function describeEmptyResponse(response: any): string {
+  try {
+    const keys = response ? Object.keys(response).join(", ") : "null";
+    const err =
+      response?.error?.message ||
+      response?.error ||
+      response?.message ||
+      "";
+    const preview = JSON.stringify(response)?.slice(0, 400);
+    return `پاسخ خالی از مدل. کلیدهای پاسخ: [${keys}] ${err ? " | " + err : ""} | نمونه: ${preview}`;
+  } catch {
+    return "پاسخ خالی از مدل دریافت شد. Base URL، مدل و کلید را بررسی کنید.";
+  }
+}
+
 export async function generateTeachingAnalysis(
   pageText: string,
   analysisType: AnalysisType = "full",
@@ -251,33 +296,80 @@ export async function generateTeachingAnalysis(
 
   let content: string | null = null;
   try {
-    const response = await client.chat.completions.create({
+    // بعضی gatewayها (مثل AgentRouter) با response_format مشکل دارند
+    const useJsonMode = !["custom", "openrouter", "xai"].includes(
+      (config.provider || "").toLowerCase()
+    ) && !(config.baseUrl || "").includes("agentrouter");
+
+    const requestBody: any = {
       model: config.model,
       temperature: config.temperature,
       max_tokens: config.maxTokens,
-      response_format: { type: "json_object" },
       messages,
-    });
-    content = response.choices[0]?.message?.content || null;
+    };
+    if (useJsonMode) {
+      requestBody.response_format = { type: "json_object" };
+    }
+
+    const response: any = await client.chat.completions.create(requestBody);
+
+    content = pickContent(response);
+
+    if (!content) {
+      if (response?.error) {
+        throw new Error(
+          typeof response.error === "string"
+            ? response.error
+            : response.error?.message || "خطای API"
+        );
+      }
+      // نگه داشتن برای پیام نهایی
+      (globalThis as any).__lastAIResponse = response;
+    }
   } catch (err: any) {
-    const msg = err?.message || "";
-    if (msg.includes("json") || msg.includes("JSON") || err?.code === "json_validate_failed" || err?.status === 400) {
-      const response = await client.chat.completions.create({
-        model: config.model,
-        temperature: config.temperature,
-        max_tokens: Math.max(config.maxTokens, 4096),
-        messages: [
-          ...messages,
-          { role: "user", content: "فقط یک آبجکت JSON معتبر برگردان. هیچ متنی قبل یا بعد ننویس." },
-        ],
-      });
-      content = response.choices[0]?.message?.content || null;
+    const msg = String(err?.message || err || "");
+    // تلاش دوم بدون json_object
+    if (
+      msg.includes("json") ||
+      msg.includes("JSON") ||
+      msg.includes("response_format") ||
+      err?.code === "json_validate_failed" ||
+      err?.status === 400
+    ) {
+      try {
+        const response: any = await client.chat.completions.create({
+          model: config.model,
+          temperature: config.temperature,
+          max_tokens: Math.max(config.maxTokens || 0, 4096),
+          messages: [
+            ...messages,
+            {
+              role: "user",
+              content:
+                "فقط یک آبجکت JSON معتبر برگردان. هیچ متنی قبل یا بعد از JSON ننویس.",
+            },
+          ],
+        });
+        content = pickContent(response);
+        if (!content) (globalThis as any).__lastAIResponse = response;
+      } catch (err2: any) {
+        throw new Error(
+          err2?.message ||
+            msg ||
+            "خطا در ارتباط با مدل. Base URL، کلید و نام مدل را بررسی کنید."
+        );
+      }
     } else {
-      throw err;
+      throw new Error(
+        msg || "خطا در ارتباط با مدل. Base URL، کلید و نام مدل را بررسی کنید."
+      );
     }
   }
 
-  if (!content) throw new Error("پاسخ خالی از مدل دریافت شد.");
+  if (!content) {
+    const last = (globalThis as any).__lastAIResponse;
+    throw new Error(describeEmptyResponse(last));
+  }
   try {
     return normalizeResult(extractJson(content));
   } catch {
@@ -287,17 +379,30 @@ export async function generateTeachingAnalysis(
 
 /** Seed پرامپت‌های پیش‌فرض اگر خالی باشند */
 export async function ensureDefaultPrompts() {
-  for (const [key, content] of Object.entries(DEFAULT_PROMPTS)) {
+  try {
     const titles: Record<string, string> = {
       system: "پرامپت سیستم",
       quick: "دستور تحلیل سریع",
       full: "دستور تحلیل کامل",
       creative: "دستور تحلیل جذاب",
     };
-    await prisma.aIPrompt.upsert({
-      where: { key },
-      create: { key, title: titles[key] || key, content, description: "" },
-      update: {},
-    });
+    const entries = Object.entries(DEFAULT_PROMPTS || {});
+    for (const entry of entries) {
+      const key = entry[0];
+      const content = entry[1];
+      if (!key || content === undefined) continue;
+      await prisma.aIPrompt.upsert({
+        where: { key },
+        create: {
+          key,
+          title: titles[key] || key,
+          content: String(content),
+          description: "",
+        },
+        update: {},
+      });
+    }
+  } catch (e) {
+    console.warn("ensureDefaultPrompts skipped:", e);
   }
 }

@@ -1,3 +1,6 @@
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
@@ -82,12 +85,33 @@ export async function POST(req: Request) {
       bookTitle = book.title;
       subject = book.subject;
 
-      if (book.pages?.length) {
-        pageText =
-          book.pages
-            .map((p: any) => `--- صفحه ${p.pageNumber} ---\n${p.extractedText || ""}`)
-            .join("\n\n") + (extraText ? "\n\n" + extraText : "");
+      const nums = pageNumbers.length ? pageNumbers : [1];
+      const pageMap = new Map<number, string>();
+      if (Array.isArray(book.pages)) {
+        for (const p of book.pages as any[]) {
+          pageMap.set(p.pageNumber, p.extractedText || "");
+        }
       }
+
+      const blocks = nums.map((num: number) => {
+        const raw = (pageMap.get(num) || "").trim();
+        const isSample =
+          !raw ||
+          raw.includes("متن نمونه") ||
+          raw.includes("در نسخه واقعی") ||
+          raw.includes("برای تست سیستم");
+        if (isSample) {
+          return (
+            `--- صفحه ${num} از کتاب «${book.title}» | درس: ${book.subject} | پایه سوم ---\n` +
+            `متن کامل این صفحه هنوز از PDF استخراج نشده است.\n` +
+            `بر اساس عنوان کتاب، موضوع درس و شماره صفحه ${num}، راهنمای تدریس عملی مخصوص همین صفحه بنویس.\n` +
+            `خروجی نباید با تحلیل صفحات دیگر یکسان باشد؛ محتوا را متناسب با صفحه ${num} متمایز کن.`
+          );
+        }
+        return `--- صفحه ${num} ---\n${raw}`;
+      });
+
+      pageText = blocks.join("\n\n") + (extraText ? "\n\n" + extraText : "");
     }
 
     if (!pageText.trim() && imageBase64) {
@@ -96,10 +120,15 @@ export async function POST(req: Request) {
     }
 
     if (!pageText.trim()) {
-      pageText = `محتوای صفحات ${pageNumbers.join("، ")} از کتاب ${bookTitle}`;
+      pageText = `صفحات ${pageNumbers.join("، ")} از کتاب ${bookTitle} درس ${subject} پایه سوم. تحلیل مخصوص همین صفحات باشد.`;
     }
 
-    const settings = await prisma.userSettings.findUnique({ where: { userId } });
+    // یکتاسازی ورودی برای جلوگیری از پاسخ تکراری مدل/کش
+    pageText =
+      `[درخواست جدید | زمان: ${new Date().toISOString()} | صفحات: ${pageNumbers.join(",")}]\n\n` +
+      pageText;
+
+        const settings = await prisma.userSettings.findUnique({ where: { userId } });
 
     const result = await generateTeachingAnalysis(
       pageText,
@@ -143,10 +172,20 @@ export async function POST(req: Request) {
       },
     });
 
-    return NextResponse.json({
-      id: analysis.id,
-      ...result,
-    });
+    return NextResponse.json(
+      {
+        id: analysis.id,
+        ...result,
+        _pageNumbers: pageNumbers,
+        _generatedAt: new Date().toISOString(),
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          Pragma: "no-cache",
+        },
+      }
+    );
   } catch (error: any) {
     console.error("Analysis error:", error);
     return NextResponse.json(
